@@ -1,7 +1,7 @@
 {
-  "name": "jay-music-proxy-api",
+  "name": "jay-music-secure-api",
   "version": "1.0.0",
-  "description": "Proxy API for JAY MUSIC - forwards requests to external music API",
+  "description": "Secure Music API with CORS, API Keys, Rate Limiting & Referer Validation",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -11,7 +11,10 @@
     "express": "^4.18.2",
     "axios": "^1.5.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "express-rate-limit": "^6.7.0",
+    "helmet": "^7.0.0",
+    "express-validator": "^7.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
