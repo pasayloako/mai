@@ -1,7 +1,7 @@
 {
   "name": "jay-music-secure-api",
   "version": "1.0.0",
-  "description": "Secure Music API with CORS, API Keys, Rate Limiting & Referer Validation",
+  "description": "Secure Music API with Multi-Layer Protection",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -14,7 +14,8 @@
     "dotenv": "^16.3.1",
     "express-rate-limit": "^6.7.0",
     "helmet": "^7.0.0",
-    "express-validator": "^7.0.1"
+    "express-validator": "^7.0.1",
+    "node-cache": "^5.1.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
