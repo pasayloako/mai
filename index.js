@@ -4,25 +4,43 @@ const axios = require('axios');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { body, query, validationResult } = require('express-validator');
+const { query, validationResult } = require('express-validator');
+const NodeCache = require('node-cache');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ===== CONFIGURATION =====
+// ===== 1. TRUST PROXY (for Render deployment) =====
+app.set('trust proxy', 1);
+
+// ===== 2. DISABLE EXPRESS FINGERPRINTING =====
+app.disable('x-powered-by');
+
+// ===== 3. CONFIGURATION =====
 const EXTERNAL_API = process.env.EXTERNAL_API || 'https://music-api--s1fuh4x.replit.app';
 const VALID_API_KEYS = [
     process.env.API_KEY_1,
     process.env.API_KEY_2
-].filter(key => key); // Remove undefined keys
+].filter(key => key);
 
-// Allowed Origins from .env
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
     ? process.env.ALLOWED_ORIGINS.split(',')
     : ['https://searchmusic.gt.tc'];
 
-// ===== 1. HELMET - Security Headers =====
+const ALLOWED_DOMAINS = [
+    'youtube.com',
+    'www.youtube.com',
+    'youtu.be'
+];
+
+// ===== 4. CACHE SETUP =====
+const cache = new NodeCache({ 
+    stdTTL: parseInt(process.env.CACHE_TTL) || 300,
+    checkperiod: 120
+});
+
+// ===== 5. HELMET - Security Headers =====
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -45,103 +63,127 @@ app.use(helmet({
     xssFilter: true,
 }));
 
-// ===== 2. CORS - Strict Configuration =====
+// ===== 6. CORS - Strict Configuration =====
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or server-to-server)
         if (!origin) {
             return callback(null, true);
         }
         
-        // Check if origin is allowed
         if (ALLOWED_ORIGINS.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            console.log(`🚫 BLOCKED CORS origin: ${origin}`);
-            callback(new Error(`Origin ${origin} Bawal Ka gumamit ng API`));
+            console.log(`🚫 BAWAL YAN origin: ${origin}`);
+            callback(new Error(`Origin not allowed`));
         }
     },
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'x-api-key'],
     exposedHeaders: ['X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
     credentials: true,
-    maxAge: 86400 // 24 hours
+    maxAge: 86400
 }));
 
-// ===== 3. API KEY VALIDATION =====
+// ===== 7. REQUEST SIZE LIMIT =====
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
+app.use(express.static('public'));
+
+// ===== 8. REQUEST TIMEOUT PROTECTION =====
+app.use((req, res, next) => {
+    const timeout = parseInt(process.env.REQUEST_TIMEOUT) || 30000;
+    res.setTimeout(timeout, () => {
+        res.status(408).json({
+            success: false,
+            error: 'Request timeout'
+        });
+    });
+    next();
+});
+
+// ===== 9. API KEY VALIDATION =====
 const validateApiKey = (req, res, next) => {
-    // Check for API key in headers (both formats)
     const apiKey = req.headers['x-api-key'] || req.headers['authorization'];
     
     if (!apiKey) {
-        console.log(`🔑 No API key provided - IP: ${req.ip}`);
+        console.log(`🔑 [SECURITY] No API key provided - IP: ${req.ip}`);
         return res.status(401).json({
             success: false,
-            error: 'API key required',
-            message: 'Please provide a valid API key in the x-api-key header'
+            error: 'API key required'
         });
     }
 
-    // Remove 'Bearer ' prefix if present
     const cleanKey = apiKey.replace(/^Bearer\s+/i, '');
     
-    // Check if API key is valid
     if (!VALID_API_KEYS.includes(cleanKey)) {
-        console.log(`🔑 Invalid API key attempt - IP: ${req.ip}`);
+        console.log(`🔑 [SECURITY] Invalid API key attempt - IP: ${req.ip}`);
         return res.status(403).json({
             success: false,
-            error: 'Invalid API key',
-            message: 'The provided API key is not valid'
+            error: 'Invalid API key'
         });
     }
 
-    console.log(`🔑 Valid API key used - IP: ${req.ip}`);
     next();
 };
 
-// ===== 4. RATE LIMITING =====
-const limiter = rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) * 60 * 1000 || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX) || 100, // Limit each IP to 100 requests per windowMs
+// ===== 10. RATE LIMITERS =====
+
+// Search limiter: 50 requests per minute
+const searchLimiter = rateLimit({
+    windowMs: parseInt(process.env.SEARCH_RATE_LIMIT_WINDOW) * 1000 || 60000,
+    max: parseInt(process.env.SEARCH_RATE_LIMIT_MAX) || 50,
     message: {
         success: false,
-        error: 'Too many requests',
-        message: 'Rate limit exceeded. Please try again later.'
+        error: 'Rate limit exceeded'
     },
-    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    standardHeaders: true,
+    legacyHeaders: false,
     keyGenerator: (req) => {
-        // Use API key or IP as identifier
         const apiKey = req.headers['x-api-key'] || req.headers['authorization'];
-        if (apiKey) {
-            return `key:${apiKey.replace(/^Bearer\s+/i, '')}`;
-        }
-        return `ip:${req.ip}`;
-    },
-    skip: (req) => {
-        // Skip rate limiting for health checks from localhost
-        return req.path === '/api/health' && req.ip === '::1';
+        const cleanKey = apiKey ? apiKey.replace(/^Bearer\s+/i, '') : 'unknown';
+        return `${req.ip}:${cleanKey}`;
     },
     handler: (req, res) => {
-        console.log(`⏱️ Rate limit exceeded - IP: ${req.ip}`);
+        console.log(`⏱️ [SECURITY] Search rate limit exceeded - IP: ${req.ip}`);
         res.status(429).json({
             success: false,
-            error: 'Rate limit exceeded',
-            message: 'Too many requests. Please wait before trying again.'
+            error: 'Rate limit exceeded'
         });
     }
 });
 
-// ===== 5. REFERER VALIDATION =====
+// Download limiter: 10 requests per minute
+const downloadLimiter = rateLimit({
+    windowMs: parseInt(process.env.DOWNLOAD_RATE_LIMIT_WINDOW) * 1000 || 60000,
+    max: parseInt(process.env.DOWNLOAD_RATE_LIMIT_MAX) || 10,
+    message: {
+        success: false,
+        error: 'Rate limit exceeded'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        const apiKey = req.headers['x-api-key'] || req.headers['authorization'];
+        const cleanKey = apiKey ? apiKey.replace(/^Bearer\s+/i, '') : 'unknown';
+        return `${req.ip}:${cleanKey}`;
+    },
+    handler: (req, res) => {
+        console.log(`⏱️ [SECURITY] Download rate limit exceeded - IP: ${req.ip}`);
+        res.status(429).json({
+            success: false,
+            error: 'Rate limit exceeded'
+        });
+    }
+});
+
+// ===== 11. REFERER VALIDATION =====
 const validateReferer = (req, res, next) => {
-    // Skip for health check and status endpoints
     if (req.path === '/api/health' || req.path === '/api/status') {
         return next();
     }
 
     const referer = req.headers.referer || req.headers.referrer || '';
     
-    // Allow direct API calls with valid API key (no referer needed)
     const apiKey = req.headers['x-api-key'] || req.headers['authorization'];
     if (apiKey) {
         const cleanKey = apiKey.replace(/^Bearer\s+/i, '');
@@ -150,65 +192,59 @@ const validateReferer = (req, res, next) => {
         }
     }
 
-    // Check if referer is from allowed origins
     const isAllowed = ALLOWED_ORIGINS.some(origin => {
-        // Check if referer starts with the allowed origin
         return referer.startsWith(origin) || referer.startsWith(origin + '/');
     });
 
     if (!isAllowed && referer) {
-        console.log(`🚫 BLOCKED referer: ${referer}`);
+        console.log(`🚫 [SECURITY] BLOCKED referer: ${referer} - IP: ${req.ip}`);
         return res.status(403).json({
             success: false,
-            error: 'Access denied',
-            message: 'Invalid referer. Only allowed domains can access this API.'
+            error: 'Access denied'
         });
     }
 
     next();
 };
 
-// ===== 6. REQUEST VALIDATION =====
+// ===== 12. URL DOMAIN VALIDATION =====
+const isValidDomain = (url) => {
+    try {
+        const parsedUrl = new URL(url);
+        const hostname = parsedUrl.hostname.toLowerCase();
+        return ALLOWED_DOMAINS.some(domain => hostname === domain || hostname.endsWith(`.${domain}`));
+    } catch {
+        return false;
+    }
+};
+
+// ===== 13. LOGGING MIDDLEWARE =====
+app.use((req, res, next) => {
+    const origin = req.headers.origin || 'unknown';
+    const apiKey = req.headers['x-api-key'] ? '[PRESENT]' : 'none';
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - Origin: ${origin} - IP: ${req.ip}`);
+    next();
+});
+
+// ===== 14. REQUEST VALIDATION =====
 const validateSearch = [
-    query('q').notEmpty().withMessage('Search query is required').isString().trim().escape(),
+    query('q').notEmpty().withMessage('Search query required').isString().trim().escape(),
     query('limit').optional().isInt({ min: 1, max: 50 }).withMessage('Limit must be between 1 and 50')
 ];
 
 const validateDownload = [
-    query('url').notEmpty().withMessage('URL is required').isURL().withMessage('Invalid URL format'),
+    query('url').notEmpty().withMessage('URL required').isURL().withMessage('Invalid URL format'),
     query('quality').optional().isIn(['128', '192', '320']).withMessage('Quality must be 128, 192, or 320')
 ];
 
-// ===== 7. LOGGING MIDDLEWARE =====
-app.use((req, res, next) => {
-    const origin = req.headers.origin || 'unknown';
-    const apiKey = req.headers['x-api-key'] ? '***' : 'none';
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - Origin: ${origin} - API Key: ${apiKey}`);
-    next();
-});
-
-// ===== 8. APPLY MIDDLEWARE =====
-app.use(express.json());
-app.use(express.static('public'));
-
-// Apply rate limiting to all routes except health
-app.use((req, res, next) => {
-    if (req.path === '/api/health') {
-        return next();
-    }
-    limiter(req, res, next);
-});
-
-// Apply referer validation
-app.use(validateReferer);
-
-// Apply API key validation to all API routes
+// ===== 15. APPLY MIDDLEWARE =====
 app.use('/api', validateApiKey);
+app.use('/api', validateReferer);
 
-// ===== 9. API ROUTES =====
+// ===== 16. API ROUTES =====
 
-// Search Endpoint
-app.get('/api/music/search', validateSearch, async (req, res) => {
+// Search Endpoint with Caching
+app.get('/api/music/search', searchLimiter, validateSearch, async (req, res) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -219,8 +255,16 @@ app.get('/api/music/search', validateSearch, async (req, res) => {
         }
 
         const { q, limit = 12 } = req.query;
+        const cacheKey = `search:${q}:${limit}`;
+        
+        // Check cache
+        const cachedResult = cache.get(cacheKey);
+        if (cachedResult) {
+            console.log(`📦 Cache hit: "${q}"`);
+            return res.json(cachedResult);
+        }
 
-        console.log(`🔍 Searching for: "${q}" (limit: ${limit})`);
+        console.log(`🔍 Searching: "${q}" (limit: ${limit})`);
 
         const response = await axios.get(`${EXTERNAL_API}/api/music/search`, {
             params: {
@@ -230,6 +274,10 @@ app.get('/api/music/search', validateSearch, async (req, res) => {
             timeout: 30000
         });
 
+        // Cache the result
+        cache.set(cacheKey, response.data);
+        console.log(`💾 Cached: "${q}"`);
+
         res.json(response.data);
 
     } catch (error) {
@@ -238,27 +286,24 @@ app.get('/api/music/search', validateSearch, async (req, res) => {
         if (error.response) {
             res.status(error.response.status).json({
                 success: false,
-                error: 'External API error',
-                details: error.response.data
+                error: 'External API error'
             });
         } else if (error.request) {
             res.status(503).json({
                 success: false,
-                error: 'External API unavailable',
-                message: 'The music service is currently down. Please try again later.'
+                error: 'Service unavailable'
             });
         } else {
             res.status(500).json({
                 success: false,
-                error: 'Internal server error',
-                message: error.message
+                error: 'Internal server error'
             });
         }
     }
 });
 
-// Download Endpoint
-app.get('/api/music/download', validateDownload, async (req, res) => {
+// Download Endpoint with Domain Validation
+app.get('/api/music/download', downloadLimiter, validateDownload, async (req, res) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -269,6 +314,15 @@ app.get('/api/music/download', validateDownload, async (req, res) => {
         }
 
         const { url, quality = '320' } = req.query;
+
+        // Validate domain
+        if (!isValidDomain(url)) {
+            console.log(`🚫 [SECURITY] Invalid domain: ${url} - IP: ${req.ip}`);
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid URL domain'
+            });
+        }
 
         console.log(`⬇️ Downloading: ${url} (quality: ${quality})`);
 
@@ -289,8 +343,7 @@ app.get('/api/music/download', validateDownload, async (req, res) => {
         res.set({
             'Content-Type': contentType,
             'Content-Length': response.data.length,
-            'Cache-Control': 'public, max-age=3600',
-            'Access-Control-Expose-Headers': 'Content-Disposition'
+            'Cache-Control': 'public, max-age=3600'
         });
 
         if (contentType.includes('application/json')) {
@@ -298,8 +351,7 @@ app.get('/api/music/download', validateDownload, async (req, res) => {
             if (jsonData.error || !jsonData.success) {
                 return res.status(400).json({
                     success: false,
-                    error: 'External API returned error',
-                    details: jsonData
+                    error: 'External API error'
                 });
             }
         }
@@ -313,146 +365,103 @@ app.get('/api/music/download', validateDownload, async (req, res) => {
             if (error.response.status === 404) {
                 res.status(404).json({
                     success: false,
-                    error: 'Audio not found',
-                    message: 'The requested audio could not be found'
+                    error: 'Audio not found'
                 });
             } else if (error.response.status === 503) {
                 res.status(503).json({
                     success: false,
-                    error: 'Service unavailable',
-                    message: 'The music download service is temporarily unavailable'
+                    error: 'Service unavailable'
                 });
             } else {
                 res.status(error.response.status).json({
                     success: false,
-                    error: 'External API error',
-                    status: error.response.status
+                    error: 'External API error'
                 });
             }
         } else if (error.code === 'ECONNABORTED') {
             res.status(504).json({
                 success: false,
-                error: 'Timeout',
-                message: 'The download took too long. Please try again.'
+                error: 'Request timeout'
             });
         } else {
             res.status(500).json({
                 success: false,
-                error: 'Internal server error',
-                message: error.message
+                error: 'Internal server error'
             });
         }
     }
 });
 
-// ===== 10. PUBLIC ENDPOINTS (No API Key Required) =====
+// ===== 17. PUBLIC ENDPOINTS (Minimal Information) =====
 
-// Health Check (Rate limited but no API key)
+// Health Check - Minimal
 app.get('/api/health', async (req, res) => {
     try {
         await axios.get(`${EXTERNAL_API}/api/health`, { timeout: 5000 });
-        
-        res.json({
-            success: true,
-            status: 'online',
-            timestamp: new Date().toISOString(),
-            version: '1.0.0',
-            external_api: 'connected',
-            security: {
-                cors: ALLOWED_ORIGINS,
-                rate_limit: {
-                    window: `${process.env.RATE_LIMIT_WINDOW || 15} minutes`,
-                    max: process.env.RATE_LIMIT_MAX || 100
-                },
-                api_keys: `${VALID_API_KEYS.length} active keys`
-            }
-        });
+        res.json({ success: true, status: 'online' });
     } catch (error) {
-        res.json({
-            success: true,
-            status: 'online',
-            timestamp: new Date().toISOString(),
-            version: '1.0.0',
-            external_api: 'disconnected',
-            error: error.message
-        });
+        res.json({ success: true, status: 'online' });
     }
 });
 
-// Status Endpoint (No API key needed)
+// Status - Minimal
 app.get('/api/status', (req, res) => {
-    res.json({
-        success: true,
-        message: 'JAY MUSIC API - Secure Proxy Server',
-        endpoints: {
-            search: '/api/music/search?q=umaasa',
-            download: '/api/music/download?url=https://www.youtube.com/watch?v=GX3X9PmQOHY',
-            health: '/api/health'
-        },
-        security: {
-            cors_enabled: true,
-            allowed_origins: ALLOWED_ORIGINS,
-            rate_limit_enabled: true,
-            rate_limit_window: `${process.env.RATE_LIMIT_WINDOW || 15} minutes`,
-            rate_limit_max: process.env.RATE_LIMIT_MAX || 100,
-            api_keys: `${VALID_API_KEYS.length} active keys`,
-            referer_validation: true
-        },
-        external_api: EXTERNAL_API
-    });
+    res.json({ success: true, status: 'online' });
 });
 
-// ===== 11. ROOT ENDPOINT =====
+// ===== 18. ROOT ENDPOINT =====
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ===== 12. 404 HANDLER =====
+// ===== 19. 404 HANDLER =====
 app.use((req, res) => {
     res.status(404).json({
         success: false,
-        error: 'Not found',
-        message: 'The requested endpoint does not exist'
+        error: 'Not found'
     });
 });
 
-// ===== 13. ERROR HANDLER =====
+// ===== 20. ERROR HANDLER =====
 app.use((err, req, res, next) => {
     console.error('Unhandled error:', err);
     
     if (err.message && err.message.includes('Origin')) {
+        console.log(`🚫 [SECURITY] CORS error - IP: ${req.ip}`);
         return res.status(403).json({
             success: false,
-            error: 'Access denied',
-            message: 'Your origin is not allowed to access this API'
+            error: 'Access denied'
         });
     }
     
     res.status(500).json({
         success: false,
-        error: 'Internal server error',
-        message: err.message
+        error: 'Internal server error'
     });
 });
 
-// ===== 14. START SERVER =====
+// ===== 21. CACHE CLEANUP =====
+setInterval(() => {
+    const stats = cache.getStats();
+    console.log(`📊 Cache stats: ${stats.keys} keys, hits: ${stats.hits}, misses: ${stats.misses}`);
+}, 300000); // Every 5 minutes
+
+// ===== 22. START SERVER =====
 app.listen(PORT, () => {
     console.log('========================================');
     console.log('🔒 JAY MUSIC API - Secure Proxy Server');
     console.log('========================================');
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📡 External API: ${EXTERNAL_API}`);
-    console.log(`🔗 Local: http://localhost:${PORT}`);
     console.log('========================================');
     console.log('🔐 SECURITY FEATURES:');
-    console.log(`✅ CORS: ${ALLOWED_ORIGINS.join(', ')}`);
+    console.log(`✅ CORS: Restricted to ${ALLOWED_ORIGINS.length} origins`);
     console.log(`✅ API Keys: ${VALID_API_KEYS.length} active keys`);
-    console.log(`✅ Rate Limiting: ${process.env.RATE_LIMIT_MAX || 100} requests per ${process.env.RATE_LIMIT_WINDOW || 15} minutes`);
+    console.log(`✅ Search Rate Limit: ${process.env.SEARCH_RATE_LIMIT_MAX || 50}/min`);
+    console.log(`✅ Download Rate Limit: ${process.env.DOWNLOAD_RATE_LIMIT_MAX || 10}/min`);
     console.log(`✅ Referer Validation: Enabled`);
-    console.log(`✅ Helmet Security Headers: Enabled`);
-    console.log(`✅ Input Validation: Enabled`);
-    console.log('========================================');
-    console.log('📋 TESTING:');
-    console.log(`curl -H "x-api-key: ${VALID_API_KEYS[0]}" "http://localhost:${PORT}/api/music/search?q=umaasa"`);
+    console.log(`✅ Domain Restriction: ${ALLOWED_DOMAINS.join(', ')}`);
+    console.log(`✅ Search Caching: ${process.env.CACHE_TTL || 300}s TTL`);
+    console.log(`✅ Request Timeout: ${process.env.REQUEST_TIMEOUT || 30000}ms`);
     console.log('========================================');
 });
