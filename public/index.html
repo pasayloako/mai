@@ -5,48 +5,179 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JAY MUSIC API</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 50px auto;
-            padding: 20px;
-            background: #121212;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #121212 0%, #1e1e1e 100%);
             color: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 700px;
+            width: 100%;
+            background: #1e1e1e;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
             text-align: center;
+            border: 1px solid #2a2a2a;
+        }
+        .logo {
+            font-size: 4em;
+            margin-bottom: 10px;
         }
         h1 {
             color: #1DB954;
-            font-size: 3em;
+            font-size: 2.5em;
+            font-weight: 700;
         }
-        .status {
-            background: #282828;
+        .subtitle {
+            color: #b3b3b3;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .status-card {
+            background: #2a2a2a;
             padding: 20px;
-            border-radius: 10px;
+            border-radius: 12px;
             margin: 20px 0;
         }
+        .status-online {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background: #1DB954;
+            border-radius: 50%;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
         .endpoint {
-            background: #1e1e1e;
-            padding: 10px;
-            border-radius: 5px;
+            background: #252525;
+            padding: 15px;
+            border-radius: 10px;
             margin: 10px 0;
-            font-family: monospace;
+            text-align: left;
             border-left: 4px solid #1DB954;
+        }
+        .endpoint .method {
+            color: #1DB954;
+            font-weight: bold;
+            font-size: 13px;
+            display: inline-block;
+            min-width: 40px;
+        }
+        .endpoint .path {
+            color: #ffffff;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+        .endpoint .desc {
+            color: #888;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+        .footer {
+            margin-top: 30px;
+            color: #555;
+            font-size: 12px;
+            border-top: 1px solid #2a2a2a;
+            padding-top: 20px;
+        }
+        .heart {
+            color: #e91e63;
         }
         .green {
             color: #1DB954;
         }
+        .badge {
+            display: inline-block;
+            background: #1DB954;
+            color: #121212;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        @media (max-width: 480px) {
+            .container {
+                padding: 20px;
+            }
+            h1 {
+                font-size: 1.8em;
+            }
+        }
     </style>
 </head>
 <body>
-    <h1>🎵 JAY MUSIC API</h1>
-    <div class="status">
-        <p>✅ API Server is Running</p>
-        <p style="color: #b3b3b3; font-size: 14px;">Version 1.0.0</p>
-    </div>
-  <h4>Philippians 4:13</h4>
-    
-    <div style="margin-top: 40px; color: #b3b3b3; font-size: 12px;">
-        Made with ❤️ by Jay
+    <div class="container">
+        <div class="logo">🎵</div>
+        <h1>JAY MUSIC API</h1>
+        <p class="subtitle">Proxy Service for Music Search & Download</p>
+        
+        <div class="status-card">
+            <div>
+                <span class="status-online"></span>
+                <span class="green">Online</span>
+                <span class="badge">v1.0.0</span>
+            </div>
+            <div style="margin-top: 5px; color: #666; font-size: 12px;">
+                Proxying requests to external music API
+            </div>
+        </div>
+        
+        <h3 style="color: #b3b3b3; margin: 20px 0 10px 0; font-size: 14px;">📡 Available Endpoints</h3>
+        
+        <div class="endpoint">
+            <div>
+                <span class="method">GET</span>
+                <span class="path">/api/music/search?q=umaasa&limit=10</span>
+            </div>
+            <div class="desc">Search for music by query</div>
+        </div>
+        
+        <div class="endpoint">
+            <div>
+                <span class="method">GET</span>
+                <span class="path">/api/music/download?url=https://www.youtube.com/watch?v=GX3X9PmQOHY&quality=320</span>
+            </div>
+            <div class="desc">Download audio from YouTube URL</div>
+        </div>
+        
+        <div class="endpoint">
+            <div>
+                <span class="method">GET</span>
+                <span class="path">/api/health</span>
+            </div>
+            <div class="desc">Check API health status</div>
+        </div>
+        
+        <div class="endpoint">
+            <div>
+                <span class="method">GET</span>
+                <span class="path">/api/status</span>
+            </div>
+            <div class="desc">API information and status</div>
+        </div>
+        
+        <div class="footer">
+            Made with <span class="heart">❤</span> by <strong style="color: #1DB954;">Jay</strong>
+            <br>
+            <small>Proxy Server for Music API</small>
+        </div>
     </div>
 </body>
 </html>
